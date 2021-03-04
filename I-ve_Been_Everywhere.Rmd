@@ -17,11 +17,11 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Introduction
+# Introduction
 
 This document extracts, visualizes, place names from the lyrics of Johnny Cash's "I've Been Everywhere", The objective of this document is to provide a sample of my coding as I preform a variety of data handling tasks. Code and comentary is displayed below. Unprocessed files can be found [https://github.com/noahkouchekinia/I-ve_Been_Everywhere](here). 
 
-## Extracting Place Data from Lyrics
+# Extracting Place Data from Lyrics
 
 The first step in the analysis is to extract location names from the unstructured text of the song lyrics. 
 
@@ -77,7 +77,7 @@ It looks like a systematic handling of the song lyrics, aided by the stated assu
 
 ```
 
-## Geocode Function Writing
+# Geocode Function Writing
 
 Place names are not very helpful on their own.A geocoding API, accessed through the ggmap package allows us to us to pull location data using the place names. This is as if we were searching Google maps for each location. 
 
@@ -188,7 +188,7 @@ table
 ```
 
 
-## Mapping "Everywhere"
+# Mapping "Everywhere"
 R has some marvelous packages to create maps. Let's map where Cash has been. 
 ```{r message=FALSE, warning=FALSE, include=FALSE}
 #We can now build a map of where Jonny Cash has been
@@ -304,7 +304,7 @@ ggplot()+
     map
 ```
 
-## Why has Cash been where he has been?
+# Why has Cash been where he has been?
 As one can see from the Map above, Jonny Cash has been plenty of places. He has not, however, been *everywhere*. This begs the question, why did Cash go where he went? Below, this question is tackled with a logistic regression. 
 
 The level of analysis is US counties. Excellent county by county data is available for the US. Additionally, the bulk of places named in the song can be pinpointed to US counties. However, This means that the model have to take into account locations fromt he song that fall outside the US, or locations that include several counties, i.e. states.
