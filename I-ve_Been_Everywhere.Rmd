@@ -1,0 +1,343 @@
+---
+title: "*I've Been Everywhere* Analysis"
+author: "Noah A. Kouchekinia"
+date: "Updated 2021-03-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This document extracts, visualizes, place names from the lyrics of Johnny Cash's "I've Been Everywhere", The objective of this document is to provide a sample of my coding as I preform a variety of data handling tasks. Code and comentary is displayed below. Unprocessed files can be found [https://github.com/noahkouchekinia/I-ve_Been_Everywhere](here). 
+
+## Extracting Place Data from Lyrics
+
+The first step in the analysis is to extract location names from the unstructured text of the song lyrics. 
+
+In order to do this systematically and efficiently, I will rely on three common sense assumptions about the lyrics: 
+1. Although other aspects of the song are repetitive, lines with place names are not repeated. 
+2. Unlike most other song lyrics, place names are capitalized. 
+3. Place names will not include generic stop words. 
+
+```{r lyrics}
+#I read in the lyrics from a text file as a character vector with an string for each line
+  setwd("/home/noah/Documents/Code Samples/I-ve_Been_Everywhere")
+  lyrics <- readLines("./Data/I've Been Everywhere.txt")
+
+#Lets extract ngrams from the song
+  #Eliminating blank or duplicated lines (first assumption)
+    lines <- lyrics[! lyrics == ""] #We can eliminate blank lines
+    lines <- lines[! lines %in% lines[duplicated(lines)]] #eliminate duplicate lines 
+    
+  #Pulling out capitalized phrases (second assumption)
+    library(stringr)
+    phrases <- str_extract_all(lines, pattern = "([A-Z][a-z'\\-]+ ?)+") 
+    phrases <- unlist(phrases)
+    phrases <- trimws(phrases)
+
+    
+  #Eliminating place names that include stop words (third assumption)
+    library(stopwords)
+    regex_stopwords <- paste(paste0(" ",paste(stopwords(), collapse = " | ")," "),
+                             paste0("^",paste(stopwords(), collapse = " |^")," "),
+                             paste0(" ",paste(stopwords(), collapse = "$| "),"$"),
+                             paste0("^",paste(stopwords(), collapse = "$|^"),"$"),
+                             sep = "|")
+                                #^ these pastes make a long regex that will capture stopwords
+                             
+    places <- phrases[-grep(regex_stopwords, tolower(phrases))] #removes phrases with stopwords
+    
+  #Lets look at our list
+    places <- places[-duplicated(places)]
+    places
+```
+
+It looks like a systematic handling of the song lyrics, aided by the stated assumptions, did an alright job pulling place names out of the song lyrics. However, it does look like there were some errors, two false positives and a false negative. Such is the messy reality of text data. 
+
+"Listen" and "Pete's" were retained. They fit my assumptions even though they was not a place names. "Fond du Lac" was not included. It failed to meet my assumptions even though it was a place name. I manually correct these errors below
+
+```{r}
+#Removing false positives
+  places <- places[! places %in% c("Listen", "Pete's")]
+
+#Adding the place name Fond du Lac
+  places <- places[! places %in% c("Fond","Lac")]
+  places <- c(places, "Fond du Lac")
+
+```
+
+## Geocode Function Writing
+
+Place names are not very helpful on their own.A geocoding API, accessed through the ggmap package allows us to us to pull location data using the place names. This is as if we were searching Google maps for each location. 
+
+```{r include=FALSE}
+Noahs_APIkey <- 'AIzaSyCFLAMJc_gCi4BHmTeFSp_p6EJPWUnKKyI'
+```
+
+Just knowing place names is not particularly interesting. I want to get data about these places. I will use Google map's API to get information about the locations we have extracted from song lyrics. I will write my own geocoding function to do so. There is a preexisting package with functions to interact with the Google maps API, however the function it includes is inflexible and the method of authentication is outdated. 
+
+```{r}
+library(jsonlite)
+vector_fromJSON <- Vectorize(fromJSON, SIMPLIFY = FALSE)
+  
+#Now lets write a geocoding function that returns a dataframe
+  geocode <- function(locations, 
+                      regioncode = 'us', 
+                      APIkey){
+                             
+      json_locations <- gsub(' ', '+', locations)
+                                    
+      response <- vector_fromJSON(paste0('https://maps.googleapis.com/maps/api/geocode/json?',
+                                         'address=', 
+                                         json_locations,
+                                         '&regioncode=', regioncode,
+                                         '&key=', APIkey))
+                              
+      response <- unlist(response, recursive = F)
+      status <- response[grep('.status$',names(response))]
+      status <- unlist(status)
+      results <- response[grep('.results$',names(response))]
+                              
+      lat       <- as.numeric(unlist(lapply(results, function(x){x$geometry$location$lat[1]})))
+      lng       <- as.numeric(unlist(lapply(results, function(x){x$geometry$location$lng[1]})))
+                              
+      address <- lapply(results, 
+                        function(x){address = data.frame(x$address_components[[1]]$long_name, 
+                                                         unlist(lapply(x$address_components[[1]]$types, 
+                                                                       paste, 
+                                                                       collapse = ", ")),
+                                                         stringsAsFactors = FALSE)})
+      address <- lapply(address,
+                        function(x){names(x)<-c("comps", "types");x})
+                              
+      country   <- unlist(lapply(address, 
+                                 function(x){ifelse(length(x$comps[grep('country', 
+                                                                        x$types)]) == 1, 
+                                                    x$comps[grep('country', x$types)],
+                                                    NA)}))
+      
+      state   <- unlist(lapply(address, 
+                               function(x){ifelse(length(x$comps[grep('administrative_area_level_1', 
+                                                                      x$types
+                                                                      )]) == 1, 
+                                           x$comps[grep('administrative_area_level_1', 
+                                                        x$types)],
+                                            NA)}))
+      
+      county   <- unlist(lapply(address, 
+                                function(x){ifelse(length(x$comps[grep('administrative_area_level_2', 
+                                                                       x$types)]) == 1, 
+                                            x$comps[grep('administrative_area_level_2', x$types)],
+                                            NA)}))
+      
+      locality <- unlist(lapply(address, 
+                                function(x){ifelse(length(x$comps[grep('locality', 
+                                                                       x$types)]) == 1, 
+                                            x$comps[grep('locality', x$types)],
+                                            NA)}))
+
+      df <- data.frame(locations,
+                       lat, 
+                       lng, 
+                       locality, 
+                       county, 
+                       state, 
+                       country, 
+                       status, 
+                       stringsAsFactors = F)
+      
+      names(df) <- c("locations", 
+                     "lat",
+                     "lng",
+                     "locality",
+                     "county", 
+                     "state",
+                     "country", 
+                     "geocode_status")
+      
+      rownames(df) <- 1:nrow(df)
+                              
+      return(df)
+                                      }
+```
+
+Now I can run my function on all the places we extracted from the song.
+```{r}
+places <- geocode(locations = places, APIkey = Noahs_APIkey)
+
+View(places)
+```
+
+```{r echo=FALSE}
+library(kableExtra)
+table <- knitr::kable(places)
+table <- kableExtra::kable_styling(table)
+table <- kableExtra::scroll_box(table, width = "100%", height = "300px")
+table
+```
+
+
+## Mapping "Everywhere"
+R has some marvelous packages to create maps. Let's map where Cash has been. 
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#We can now build a map of where Jonny Cash has been
+  library(spData); library(rgdal); library(leaflet)
+
+#Lets create some logical vectors that we can use to subset the data by type of location
+  country   <- (is.na(places$locality) & is.na(places$county) & is.na(places$state)) 
+  state      <- (is.na(places$locality) & is.na(places$county) & !country)
+  localities  <- (!country | !state)
+  
+#Lets load some shape data that will be useful for mapping 
+  state_map <- readOGR("./Shapefiles/cb_2018_us_state_20m/cb_2018_us_state_20m.shp")
+  state_shapes   <- state_map[state_map@data$NAME %in% places$state[state],]
+  
+  country_map <- readOGR("./Shapefiles/Longitude_Graticules_and_World_Countries_Boundaries-shp/99bfd9e7-bb42-4728-87b5-07f8c8ac631c2020328-1-1vef4ev.lu5nk.shp")
+  country_shapes   <- country_map[country_map@data$CNTRY_NAME %in% places$country[country],]
+
+```
+
+```{r}
+#Now let's use leaflet to plot
+    map <- leaflet(width = '100%', 
+                   options = leafletOptions())
+    map <- addProviderTiles(map,
+                            providers$CartoDB.Positron)
+    map <- setView(map, lng = -102, lat = 30, zoom = 2)
+    map <- addMarkers(map, 
+                      data = places[localities,],
+                      lng = ~lng, 
+                      lat = ~lat,
+                      label = ~locations
+                    )
+ map <- addPolygons(map, 
+                      data = country_shapes,
+                      fillColor = "Orange",
+                      weight = 2,
+                      opacity = 1,
+                      color = "Orange",
+                      dashArray = "3",
+                      fillOpacity = 0.7,
+                      label = ~CNTRY_NAME,
+                      highlight = highlightOptions(
+                                  weight = 2,
+                                  color = "white",
+                                  dashArray = "3",
+                                  fillOpacity = 0.75,
+                                  bringToFront = TRUE)
+                    )    
+ map <- addPolygons(map, 
+                      data = state_shapes,
+                      fillColor = "Green",
+                      weight = 2,
+                      opacity = 1,
+                      color = "Green",
+                      dashArray = "3",
+                      label = ~NAME,
+                      fillOpacity = 0.7,
+                      highlight = highlightOptions(
+                                  weight = 2,
+                                  color = "white",
+                                  dashArray = "3",
+                                  fillOpacity = 0.75,
+                                  bringToFront = TRUE)
+                    )    
+ 
+ map 
+```
+
+Fancy mapping packages are good fun. However it is often more sensible to make a well designed static image. Below, I make a similar map, relying only on trusty ggplot2.
+
+```{r}
+library(ggplot2)
+library(broom)
+
+#Convert to plain dfs, as ggplot expects
+state_df <- tidy(state_map, region = "STUSPS")
+country_df <- tidy(country_map, region = "CNTRY_NAME")
+
+#Plot
+ggplot()+
+  geom_polygon(data = country_df, aes(long,lat,group=group), fill = "white", col = "grey")+
+  geom_polygon(data = state_df, aes(long,lat,group=group), fill = "white", col = "grey")+
+  geom_polygon(data = state_shapes, aes(long,lat,group=group), fill="Dark Green", col = NA)+
+  geom_polygon(data = country_shapes, aes(long,lat,group=group),fill="Orange", col = NA)+
+  geom_jitter(data = places[localities,], aes(lng, lat), color = "Dark Blue")+
+  theme_void()+
+  theme(plot.background = element_rect(fill = "grey", color = NA))+
+  coord_quickmap(xlim = c(-180,10), ylim =c(-60,80), clip = "on", expand = FALSE)
+  
+
+
+```
+
+```{r eval=FALSE, include=FALSE}
+
+    map <- leaflet()
+    map <- addProviderTiles(map,providers$CartoDB.Positron)
+    map <- addPolygons(map, 
+                      data = tracts,
+                      fillColor = ~pal(TreeDensity),
+                      weight = 2,
+                      opacity = 1,
+                      color = "grey",
+                      dashArray = "3",
+                      fillOpacity = 0.7,
+                      highlight = highlightOptions(
+                                  weight = 2,
+                                  color = "white",
+                                  dashArray = "3",
+                                  fillOpacity = 0.75,
+                                  bringToFront = TRUE)
+                    )
+    map
+```
+
+## Why has Cash been where he has been?
+As one can see from the Map above, Jonny Cash has been plenty of places. He has not, however, been *everywhere*. This begs the question, why did Cash go where he went? Below, this question is tackled with a logistic regression. 
+
+The level of analysis is US counties. Excellent county by county data is available for the US. Additionally, the bulk of places named in the song can be pinpointed to US counties. However, This means that the model have to take into account locations fromt he song that fall outside the US, or locations that include several counties, i.e. states.
+
+The model uses three variables:
+
+1. Population. It seems likely that Cash will go where there are people for which to preform. 
+
+2. Percent of Population Employed in Cattle Ranching. Cash maintained an image as a cow boy. It seems likely he would want to be seen among real cowboys. 
+
+3. Percent of Population Incarcerated. Cash famously preformed at Prison's around the county. It seems likely that he would have been where the prisons were. 
+
+County by county population data is taken from the ACS. the number of ranchers is taken from the EEO survey. The number of incarcerated is taken from the census. Because the first two measures are estimates, they are not available for sparsely populated counties. We will only be considering counties for which we have data for all three variables. (Essentially, this is the largest third of US Counties).
+
+
+```{r}
+library(DescTools)
+
+Population <-read.csv("./Data/Population.csv")
+Ranchers <-read.csv("./Data/Ranchers.csv")
+Prisoners <-read.csv("./Data/Prison Population.csv")
+
+counties <- merge(Prisoners, merge(Population, Ranchers, by = 'Geography'), by = 'Geography')
+names(counties)<-c('names','prison','pop','ranch')
+counties$prison <- counties$prison/counties$pop
+counties$ranch  <- counties$ranch/counties$pop
+
+counties$visited <- ifelse(counties$names %in% paste0(places$county,", ",places$state), 1, 0)
+
+model <- glm(visited ~ pop + prison + ranch, 
+             data = counties, 
+             family = binomial(link = "logit")
+)
+summary(model)
+DescTools::PseudoR2(model)
+```
+
+Looking at the distribution of residuals and the pseudo $R^2$ it is clear this model has very little explanatory power. The McFadden pseudo R squared is particularly damning; only about six percent in the variation in the likelihood that Jonny Cash has been to a county is explained in by the model's chosen predictors. Additionally only one of the predictors had a statistically significant effect: population. Note that while population is significant, it is also tiny. I can say with confidence this model does not increase our understanding of where Johnny Cash has been. 
+
+It makes sense that this model would have little explanatory power. Johnny Cash did not actually write the song. It's a cover.
+
+
+
+
